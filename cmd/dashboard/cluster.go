@@ -104,6 +104,34 @@ func (m *manager) startLocked(i int) error {
 	return nil
 }
 
+// Reset shuts down every node, wipes the metadata directory, and boots
+// the whole cluster fresh — as if the process had just started.
+func (m *manager) Reset() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for _, n := range m.nodes {
+		if n.alive {
+			n.server.Shutdown()
+			n.alive = false
+		}
+	}
+
+	if err := os.RemoveAll(m.dataDir); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(m.dataDir, 0o755); err != nil {
+		return err
+	}
+
+	for i := range m.nodes {
+		if err := m.startLocked(i); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 var errUnknownNode = fmt.Errorf("unknown node id")
 var errAlreadyAlive = fmt.Errorf("node is already running")
 var errAlreadyDead = fmt.Errorf("node is already down")

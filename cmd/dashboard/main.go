@@ -86,6 +86,14 @@ func main() {
 		writeJSON(w, map[string]bool{"ok": true})
 	})
 
+	mux.HandleFunc("POST /api/reset", func(w http.ResponseWriter, r *http.Request) {
+		if err := m.Reset(); err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, map[string]bool{"ok": true})
+	})
+
 	mux.HandleFunc("POST /api/set", func(w http.ResponseWriter, r *http.Request) {
 		var body struct{ Key, Value string }
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
