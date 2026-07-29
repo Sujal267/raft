@@ -1,3 +1,6 @@
 *.dat
 cmd/kvapi/kvapi
 cmd/stress/stress
+cmd/dashboard/dashboard
+cmd/dashboard/dashboard.exe
+dashboard-data/

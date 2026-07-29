@@ -73,6 +73,15 @@ func (s *Server) rpcCall(i int, method string, req, rsp any) bool {
 		err = client.Call(method, req, rsp)
 	}
 	if err != nil {
+		// Drop the cached client so the next call redials instead of
+		// reusing a connection that may be permanently broken (e.g.
+		// the peer crashed and came back up on the same address).
+		s.mu.Lock()
+		if s.cluster[i].rpcClient == client {
+			s.cluster[i].rpcClient = nil
+		}
+		s.mu.Unlock()
+
 		s.warnf("rpc %s to %d failed: %s", method, member.Id, err)
 		return false
 	}
@@ -168,6 +177,7 @@ func (s *Server) HandleAppendEntriesRequest(req AppendEntriesRequest, rsp *Appen
 	}
 
 	s.resetElectionTimeout()
+	s.leaderId = req.LeaderId
 
 	logLen := uint64(len(s.log))
 	validPrevLog := req.PrevLogIndex == 0 ||

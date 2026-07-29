@@ -132,6 +132,7 @@ func (s *Server) timeout() {
 
 	s.debug("election timeout: starting new election")
 	s.state = candidate
+	s.leaderId = 0
 	s.currentTerm++
 	for i := range s.cluster {
 		if i == s.clusterIndex {
@@ -172,6 +173,7 @@ func (s *Server) becomeLeader() {
 
 	s.debug("elected leader")
 	s.state = leader
+	s.leaderId = s.id
 
 	// A new leader can't know which entries from prior terms are
 	// committed until it commits something in its own term (§8), so

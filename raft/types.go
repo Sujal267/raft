@@ -152,6 +152,12 @@ type Server struct {
 	cluster      []ClusterMember
 	clusterIndex int
 
+	// leaderId is the id of the node this server believes is the
+	// current leader, learned from the last AppendEntries it accepted.
+	// It's advisory only (used for inspection/UI), never consulted by
+	// the protocol itself.
+	leaderId uint64
+
 	// ---------------- Read-only / config ----------------
 
 	id      uint64

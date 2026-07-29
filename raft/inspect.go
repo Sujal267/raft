@@ -73,3 +73,80 @@ func (s *Server) UserEntries() *EntriesIterator {
 func (s *Server) AllEntries() []Entry {
 	return s.log
 }
+
+// LogEntrySummary is a JSON-friendly view of one log slot, deliberately
+// omitting the raw Command bytes (which may not be printable) and the
+// internal result channel.
+type LogEntrySummary struct {
+	Term       uint64 `json:"term"`
+	HasCommand bool   `json:"hasCommand"`
+	Committed  bool   `json:"committed"`
+	Applied    bool   `json:"applied"`
+}
+
+// PeerStatus is the leader-only replication progress for one other node,
+// included in Status() so a dashboard can show how far behind each peer
+// is without granting it access to unexported ClusterMember fields.
+type PeerStatus struct {
+	Id         uint64 `json:"id"`
+	Address    string `json:"address"`
+	NextIndex  uint64 `json:"nextIndex"`
+	MatchIndex uint64 `json:"matchIndex"`
+}
+
+// Status is a point-in-time, JSON-friendly snapshot of everything a
+// dashboard or test harness would want to display about this node. It's
+// the one blessed way to observe a Server from outside the package.
+type Status struct {
+	Id          uint64            `json:"id"`
+	Address     string            `json:"address"`
+	State       string            `json:"state"`
+	Term        uint64            `json:"term"`
+	LeaderId    uint64            `json:"leaderId"`
+	CommitIndex uint64            `json:"commitIndex"`
+	LastApplied uint64            `json:"lastApplied"`
+	Log         []LogEntrySummary `json:"log"`
+	Peers       []PeerStatus      `json:"peers"`
+}
+
+// Status returns a snapshot of this server's state suitable for
+// serializing straight to JSON.
+func (s *Server) Status() Status {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	log := make([]LogEntrySummary, len(s.log))
+	for i, e := range s.log {
+		log[i] = LogEntrySummary{
+			Term:       e.Term,
+			HasCommand: len(e.Command) > 0,
+			Committed:  uint64(i) <= s.commitIndex,
+			Applied:    uint64(i) < s.lastApplied,
+		}
+	}
+
+	var peers []PeerStatus
+	for i, m := range s.cluster {
+		if i == s.clusterIndex {
+			continue
+		}
+		peers = append(peers, PeerStatus{
+			Id:         m.Id,
+			Address:    m.Address,
+			NextIndex:  m.nextIndex,
+			MatchIndex: m.matchIndex,
+		})
+	}
+
+	return Status{
+		Id:          s.id,
+		Address:     s.address,
+		State:       string(s.state),
+		Term:        s.currentTerm,
+		LeaderId:    s.leaderId,
+		CommitIndex: s.commitIndex,
+		LastApplied: s.lastApplied,
+		Log:         log,
+		Peers:       peers,
+	}
+}

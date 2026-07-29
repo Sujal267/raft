@@ -5,99 +5,33 @@
 package main
 
 import (
-	"bytes"
-	"encoding/binary"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"strconv"
 	"strings"
-	"sync"
 
+	"raft-go/kv"
 	"raft-go/raft"
 )
 
-type commandKind uint8
-
-const (
-	setCommand commandKind = iota
-	getCommand
-)
-
-type command struct {
-	kind  commandKind
-	key   string
-	value string
-}
-
-func encodeCommand(c command) []byte {
-	var buf bytes.Buffer
-	buf.WriteByte(uint8(c.kind))
-	binary.Write(&buf, binary.LittleEndian, uint64(len(c.key)))
-	buf.WriteString(c.key)
-	binary.Write(&buf, binary.LittleEndian, uint64(len(c.value)))
-	buf.WriteString(c.value)
-	return buf.Bytes()
-}
-
-func decodeCommand(msg []byte) command {
-	var c command
-	c.kind = commandKind(msg[0])
-
-	keyLen := binary.LittleEndian.Uint64(msg[1:9])
-	c.key = string(msg[9 : 9+keyLen])
-
-	if c.kind == setCommand {
-		valOffset := 9 + keyLen
-		valLen := binary.LittleEndian.Uint64(msg[valOffset : valOffset+8])
-		c.value = string(msg[valOffset+8 : valOffset+8+valLen])
-	}
-
-	return c
-}
-
-// kvStateMachine is the user-provided raft.StateMachine: it's the only
-// place that actually interprets and stores commands once Raft has
-// decided their order.
-type kvStateMachine struct {
-	db *sync.Map
-}
-
-func (sm *kvStateMachine) Apply(cmd []byte) ([]byte, error) {
-	c := decodeCommand(cmd)
-
-	switch c.kind {
-	case setCommand:
-		sm.db.Store(c.key, c.value)
-		return nil, nil
-	case getCommand:
-		value, ok := sm.db.Load(c.key)
-		if !ok {
-			return nil, fmt.Errorf("key not found: %s", c.key)
-		}
-		return []byte(value.(string)), nil
-	default:
-		return nil, fmt.Errorf("unknown command kind: %d", c.kind)
-	}
-}
-
 type httpServer struct {
 	raft *raft.Server
-	db   *sync.Map
+	sm   *kv.StateMachine
 }
 
 // setHandler applies a Set command through consensus.
 //
 //	curl 'http://localhost:2020/set?key=x&value=1'
 func (hs *httpServer) setHandler(w http.ResponseWriter, r *http.Request) {
-	c := command{
-		kind:  setCommand,
-		key:   r.URL.Query().Get("key"),
-		value: r.URL.Query().Get("value"),
+	c := kv.Command{
+		Kind:  kv.Set,
+		Key:   r.URL.Query().Get("key"),
+		Value: r.URL.Query().Get("value"),
 	}
 
-	if _, err := hs.raft.Apply([][]byte{encodeCommand(c)}); err != nil {
+	if _, err := hs.raft.Apply([][]byte{kv.Encode(c)}); err != nil {
 		log.Printf("could not set key: %s", err)
 		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 	}
@@ -117,15 +51,15 @@ func (hs *httpServer) getHandler(w http.ResponseWriter, r *http.Request) {
 	var err error
 
 	if r.URL.Query().Get("relaxed") == "true" {
-		v, ok := hs.db.Load(key)
+		v, ok := hs.sm.Peek(key)
 		if !ok {
 			err = fmt.Errorf("key not found: %s", key)
 		} else {
-			value = []byte(v.(string))
+			value = []byte(v)
 		}
 	} else {
 		var results []raft.ApplyResult
-		results, err = hs.raft.Apply([][]byte{encodeCommand(command{kind: getCommand, key: key})})
+		results, err = hs.raft.Apply([][]byte{kv.Encode(kv.Command{Kind: kv.Get, Key: key})})
 		if err == nil {
 			if len(results) != 1 {
 				err = fmt.Errorf("expected exactly one result, got %d", len(results))
@@ -206,14 +140,13 @@ func parseArgs() config {
 func main() {
 	cfg := parseArgs()
 
-	var db sync.Map
-	sm := &kvStateMachine{db: &db}
+	sm := kv.NewStateMachine()
 
 	rs := raft.NewServer(cfg.cluster, sm, ".", cfg.index)
 	rs.Debug = os.Getenv("DEBUG") == "true"
 	go rs.Start()
 
-	hs := &httpServer{raft: rs, db: &db}
+	hs := &httpServer{raft: rs, sm: sm}
 	http.HandleFunc("/set", hs.setHandler)
 	http.HandleFunc("/get", hs.getHandler)
 
